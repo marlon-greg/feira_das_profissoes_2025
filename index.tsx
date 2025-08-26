@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, FormEvent } from "react";
 import ReactDOM from "react-dom/client";
 
-// --- Constantes e Tipos ---
+// --- Tipos e Constantes ---
 const INSTITUTIONS = [
   { name: "SENAI (Sorocaba e Itu)", logo: "assets/logos/senai.png" },
   { name: "FATEC (Indaiatuba e Itu)", logo: "assets/logos/fatec.png" },
@@ -10,21 +10,22 @@ const INSTITUTIONS = [
   { name: "ATHON", logo: "assets/logos/athon.png" },
   { name: "UNIP", logo: "assets/logos/unip.png" },
 ];
-
 const INDIVIDUALS_AND_OTHERS = [
   "LUCIANA PACHECO", "BRUNA ROSA", "LETÍCIA JORAND (EGRESSO)",
   "MARIA LUISA (EGRESSO)", "ZOONOSES SALTO", "ROTARY (SANDERSON)",
 ];
+type Lecture = { id: string; day: number; time: string; room: string; title: string; speaker: string; capacity: number; };
+type UserProfile = { username: string; isAdmin: number; };
+type Registration = { id: number; fullName: string; rm: string; email: string; studentClass: string; };
 
-type Lecture = {
-  id: string;
-  day: number;
-  time: string;
-  room: string;
-  title: string;
-  speaker: string;
-  capacity: number;
-};
+// --- Funções Auxiliares ---
+function parseJwt(token: string): UserProfile | null {
+    try {
+        return JSON.parse(atob(token.split('.')[1]));
+    } catch (e) {
+        return null;
+    }
+}
 
 // --- Componente Principal: App ---
 const App = () => {
@@ -170,12 +171,11 @@ const RegistrationForm = ({ lectures, goToSuccess }: { lectures: Lecture[]; goTo
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [lectureCounts, setLectureCounts] = useState<Record<string, number>>({});
+  const [registrationsOpen, setRegistrationsOpen] = useState<boolean | null>(null);
 
   useEffect(() => {
-      fetch('/api/lecture-counts')
-          .then(res => res.json())
-          .then(setLectureCounts)
-          .catch(err => console.error("Erro ao buscar contagem de vagas:", err));
+      fetch('/api/lecture-counts').then(res => res.json()).then(setLectureCounts);
+      fetch('/api/settings/registrations-status').then(res => res.json()).then(data => setRegistrationsOpen(data.isOpen));
   }, []);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -220,6 +220,13 @@ const RegistrationForm = ({ lectures, goToSuccess }: { lectures: Lecture[]; goTo
     (acc[lecture.day] = acc[lecture.day] || []).push(lecture);
     return acc;
   }, {}), [lectures]);
+  
+  if (registrationsOpen === null) {
+      return <div className="card" style={{textAlign: 'center'}}>Carregando...</div>;
+  }
+  if (!registrationsOpen) {
+      return <div className="card" style={{textAlign: 'center'}}><h2>Inscrições Encerradas</h2><p>As inscrições para a Feira das Profissões foram encerradas. Agradecemos o interesse!</p></div>;
+  }
 
   const renderDaySchedule = (day: number) => {
     const lecturesDay = lecturesByDay[day] || [];
@@ -241,7 +248,7 @@ const RegistrationForm = ({ lectures, goToSuccess }: { lectures: Lecture[]; goTo
                     <input type="radio" name={`lecture_time_${time}`} value={lecture.id} checked={selectedLectures[time] === lecture.id} onChange={() => handleLectureSelect(time, lecture.id)} disabled={isFull} />
                     <div className="details"><strong>{lecture.title}</strong> - {lecture.speaker}</div>
                     <span className="badge badge-room">{lecture.room}</span>
-                    <span className="badge badge-dh">{registeredCount} / {lecture.capacity}</span>
+                    <span className="badge badge-dh">Vagas: {lecture.capacity - registeredCount} / {lecture.capacity}</span>
                     {isFull && <span className="badge badge-full">Lotado</span>}
                   </label>
                 </div>
@@ -281,12 +288,20 @@ const RegistrationForm = ({ lectures, goToSuccess }: { lectures: Lecture[]; goTo
   );
 };
 
-
 const AdminView = ({ lectures, setLectures, token, onLogout }: { lectures: Lecture[]; setLectures: (lectures: Lecture[]) => void; token: string; onLogout: () => void; }) => {
     const [isAdding, setIsAdding] = useState(false);
     const [newLecture, setNewLecture] = useState({ day: 4, time: '09:00', room: '', title: '', speaker: '', capacity: 25 });
     const [loading, setLoading] = useState(false);
+    const [registrationsOpen, setRegistrationsOpen] = useState<boolean>(true);
+    const [modalData, setModalData] = useState<{ lecture: Lecture; registrations: Registration[] } | null>(null);
+    const [modalLoading, setModalLoading] = useState(false);
+    const userProfile = useMemo(() => parseJwt(token), [token]);
+    const isFullAdmin = userProfile?.isAdmin === 1;
 
+    useEffect(() => {
+        fetch('/api/settings/registrations-status').then(res => res.json()).then(data => setRegistrationsOpen(data.isOpen));
+    }, []);
+    
     const fetchLectures = async () => {
         const updated = await fetch("/api/lectures").then((res) => res.json());
         setLectures(updated);
@@ -312,17 +327,67 @@ const AdminView = ({ lectures, setLectures, token, onLogout }: { lectures: Lectu
         setIsAdding(false);
         setLoading(false);
     };
+    
+    const handleExportCSV = () => { window.location.href = `/api/export/csv?token=${token}`; };
+
+    const toggleRegistrations = async () => {
+        const newStatus = !registrationsOpen;
+        try {
+            const res = await fetch("/api/settings/registrations-status", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ isOpen: newStatus }),
+            });
+            if(res.ok) setRegistrationsOpen(newStatus);
+        } catch(err) {
+            console.error("Falha ao alterar status das inscrições", err);
+        }
+    };
+    
+    const showRegistrations = async (lecture: Lecture) => {
+        setModalLoading(true);
+        setModalData({ lecture, registrations: [] });
+        try {
+            const res = await fetch(`/api/lectures/${lecture.id}/registrations`, { headers: { Authorization: `Bearer ${token}` } });
+            const data = await res.json();
+            setModalData({ lecture, registrations: data });
+        } catch (err) { console.error("Erro ao buscar inscritos", err); } 
+        finally { setModalLoading(false); }
+    };
+
+    const handleDeleteRegistration = async (registrationId: number, lecture: Lecture) => {
+        if (confirm('Tem certeza que deseja remover esta inscrição? Esta ação não pode ser desfeita.')) {
+            try {
+                const res = await fetch(`/api/registrations/${registrationId}`, {
+                    method: 'DELETE',
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                if (res.ok) {
+                    showRegistrations(lecture);
+                } else {
+                    alert('Falha ao remover a inscrição.');
+                }
+            } catch (err) {
+                alert('Erro de conexão ao tentar remover a inscrição.');
+            }
+        }
+    };
 
     return (
+        <>
         <div className="card admin-view">
-            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem'}}>
-                <h2>Painel de Palestras</h2>
+            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem'}}>
+                <h2>Painel de Controle ({userProfile?.username})</h2>
                 <button className="btn" onClick={onLogout}>Sair</button>
             </div>
+            
+            <div className="admin-actions" style={{display: 'flex', flexWrap: 'wrap', gap: '1rem', marginBottom: '2rem'}}>
+                {isFullAdmin && !isAdding && <button className="btn" onClick={() => setIsAdding(true)}>Adicionar Palestra</button>}
+                <button className="btn" onClick={handleExportCSV} style={{backgroundColor: '#005baa'}}>Baixar Lista Geral (CSV)</button>
+                {isFullAdmin && <button className="btn" onClick={toggleRegistrations} style={{backgroundColor: registrationsOpen ? '#c8102e' : '#4CAF50'}}>{registrationsOpen ? 'Fechar Inscrições' : 'Abrir Inscrições'}</button>}
+            </div>
 
-            {!isAdding && <button className="btn" onClick={() => setIsAdding(true)}>Adicionar Nova Palestra</button>}
-
-            {isAdding && (
+            {isFullAdmin && isAdding && (
                 <form onSubmit={handleAddLecture} className="form-section">
                     <h3>Nova Palestra</h3>
                     <div className="form-group"><label>Dia</label><select value={newLecture.day} onChange={e => setNewLecture({...newLecture, day: Number(e.target.value)})}><option value={4}>Dia 04</option><option value={5}>Dia 05</option></select></div>
@@ -339,17 +404,48 @@ const AdminView = ({ lectures, setLectures, token, onLogout }: { lectures: Lectu
             )}
             
             <table style={{marginTop: '2rem'}}>
-                <thead><tr><th>Dia</th><th>Horário</th><th>Sala</th><th>Título</th><th>Palestrante</th><th>Capacidade</th><th>Ações</th></tr></thead>
+                <thead><tr><th>Dia</th><th>Horário</th><th>Sala</th><th>Título</th><th>Ações</th></tr></thead>
                 <tbody>
-                    {lectures.length > 0 ? lectures.map((lecture) => (
+                    {lectures.map((lecture) => (
                         <tr key={lecture.id}>
-                            <td>{lecture.day}</td><td>{lecture.time}</td><td>{lecture.room}</td><td>{lecture.title}</td><td>{lecture.speaker}</td><td>{lecture.capacity}</td>
-                            <td><button onClick={() => handleDeleteLecture(lecture.id)}>Remover</button></td>
+                            <td>{lecture.day}</td><td>{lecture.time}</td><td>{lecture.room}</td><td>{lecture.title}</td>
+                            <td style={{display: 'flex', gap: '0.5rem'}}>
+                                <button onClick={() => showRegistrations(lecture)}>Ver Inscritos</button>
+                                {isFullAdmin && <button onClick={() => handleDeleteLecture(lecture.id)}>Remover</button>}
+                            </td>
                         </tr>
-                    )) : <tr><td colSpan={7} style={{textAlign: 'center'}}>Nenhuma palestra cadastrada.</td></tr>}
+                    ))}
                 </tbody>
             </table>
         </div>
+
+        {modalData && (
+            <div className="modal-overlay" onClick={() => setModalData(null)}>
+                <div className="modal-content" onClick={e => e.stopPropagation()}>
+                    <div className="modal-header">
+                        <h3>Inscritos em: {modalData.lecture.title}</h3>
+                        <button className="btn" onClick={() => setModalData(null)}>Fechar</button>
+                    </div>
+                    {modalLoading ? <p>Carregando...</p> : (
+                        <table>
+                            <thead><tr><th>Nome Completo</th><th>RM</th><th>Ações</th></tr></thead>
+                            <tbody>
+                                {modalData.registrations.length > 0 ? modalData.registrations.map(reg => (
+                                    <tr key={reg.id}>
+                                        <td>{reg.fullName}</td>
+                                        <td>{reg.rm}</td>
+                                        <td>
+                                            {isFullAdmin && <button onClick={() => handleDeleteRegistration(reg.id, modalData.lecture)}>Remover</button>}
+                                        </td>
+                                    </tr>
+                                )) : <tr><td colSpan={3} style={{textAlign: 'center'}}>Nenhum inscrito nesta palestra.</td></tr>}
+                            </tbody>
+                        </table>
+                    )}
+                </div>
+            </div>
+        )}
+        </>
     );
 };
 

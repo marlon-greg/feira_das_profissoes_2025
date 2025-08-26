@@ -37,6 +37,17 @@ CREATE TABLE users (
     is_admin INTEGER DEFAULT 1 
 );
 
+-- Cria uma nova tabela para configurações gerais
+CREATE TABLE settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+-- Insere a configuração inicial para as inscrições (começa como 'abertas')
+INSERT INTO settings (key, value) VALUES ('registrations_open', '1');
 
 INSERT INTO users (username, password_hash, is_admin)
 VALUES ('admin', '$2a$10$nd0vLr5YQ8QUZQibDryeZO9wpUzZvgQsxXXL5isbtjnaObSAh4vhO', 1);
+
+INSERT INTO users (username, password_hash, is_admin)
+VALUES ('visitante', '$2a$10$w8nC.OUv3TXq0TTg22C8NuXt2u4GvT/aFXYtX08AvALe1DS6k6nOC', 0);
