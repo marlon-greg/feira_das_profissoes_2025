@@ -4,12 +4,12 @@ import ReactDOM from "react-dom/client";
 // --- Tipos, Constantes e Funções Auxiliares ---
 const INSTITUTIONS = [
   { name: "SENAI (Sorocaba e Itu)", logo: "senai.png" },
-  { name: "FATEC (Indaiatuba e Itu)", logo: "public/logos/fatec.png" },
-  { name: "CEUNSP (Salto/Itu)", logo: "public/logos/ceunsp.png" },
-  { name: "UNIEDUK (Indaiatuba)", logo: "public/logos/unieduk.png" },
-  { name: "ATHON", logo: "public/athon.png" },
-  { name: "UNIP", logo: "public/unip.png" },
-  { name: "SENAC", logo: "public/senac.png" },
+  { name: "FATEC (Indaiatuba e Itu)", logo: "fatec.png" },
+  { name: "CEUNSP (Salto/Itu)", logo: "ceunsp.png" },
+  { name: "UNIEDUK (Indaiatuba)", logo: "unieduk.png" },
+  { name: "ATHON", logo: "athon.png" },
+  { name: "UNIP", logo: "unip.png" },
+  { name: "SENAC", logo: "senac.png" },
 ];
 const INDIVIDUALS_AND_OTHERS = [
   "LUCIANA PACHECO", "BRUNA ROSA", "LETÍCIA JORAND (EGRESSO)",
@@ -82,7 +82,7 @@ const App = () => {
 
   return (
     <>
-      <header><div className="container header-content"><a href="#home"><img src="public/sesi-logo.png" alt="SESI Logo" className="header-logo" /></a><h1>FEIRA DAS PROFISSÕES SESI 2025</h1></div></header>
+      <header><div className="container header-content"><a href="#home"><img src="sesi-logo.png" alt="SESI Logo" className="header-logo" /></a><h1>FEIRA DAS PROFISSÕES SESI 2025</h1></div></header>
       <main>{renderView()}</main>
       <footer><div className="container">Escola SESI &copy; 2025</div></footer>
     </>
