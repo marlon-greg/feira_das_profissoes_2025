@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
@@ -8,7 +9,7 @@ import { fileURLToPath } from 'url';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-const JWT_SECRET = 'SEGREDO_SUPER_SECRETO_PARA_PROJETO_FEIRA_2025';
+const JWT_SECRET = process.env.JWT_SECRET;
 
 app.use(express.json());
 const __filename = fileURLToPath(import.meta.url);
@@ -23,13 +24,19 @@ let db;
   } catch (err) { console.error('Erro ao conectar ao banco de dados:', err.message); }
 })();
 
+// FUNÇÃO CORRIGIDA
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   let token = authHeader && authHeader.split(' ')[1];
   if (token == null && req.query.token) token = req.query.token;
   if (token == null) return res.sendStatus(401);
+
+  // A CORREÇÃO ESTÁ AQUI: jwt.verify(token, JWT_SECRET, ...)
   jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) return res.sendStatus(403);
+    if (err) {
+      console.error('Erro na verificação do JWT:', err);
+      return res.sendStatus(403);
+    }
     req.user = user;
     next();
   });
@@ -43,6 +50,7 @@ const isFullAdmin = (req, res, next) => {
     }
 };
 
+// ... (O RESTANTE DO CÓDIGO PERMANECE IGUAL)
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
   try {
@@ -124,7 +132,7 @@ app.get('/api/settings/registrations-status', async (req, res) => {
     try {
         const setting = await db.get("SELECT value FROM settings WHERE key = 'registrations_open'");
         res.json({ isOpen: setting.value === '1' });
-    } catch (err) { res.status(500).json({ message: 'Erro ao buscar status das inscrições.' }); }
+    } catch (err) { res.status(500).json({ message: 'Erro ao buscar status das inscrições.', error: err.message }); }
 });
 
 app.put('/api/settings/registrations-status', authenticateToken, isFullAdmin, async (req, res) => {
@@ -150,16 +158,23 @@ app.post('/api/lectures', authenticateToken, isFullAdmin, async (req, res) => {
 });
 
 app.put('/api/lectures/:id', authenticateToken, async (req, res) => {
-    const { id } = req.params;
-    const { day, time, room, title, speaker, capacity } = req.body;
+    const lectureId = req.params.id;
+    const { title, speaker, capacity } = req.body;
+    if (!title || !speaker || capacity === undefined) {
+        return res.status(400).json({ message: 'Título, palestrante e capacidade são obrigatórios.' });
+    }
     try {
-        await db.run(
-            'UPDATE lectures SET day = ?, time = ?, room = ?, title = ?, speaker = ?, capacity = ? WHERE id = ?',
-            [day, time, room, title, speaker, capacity, id]
+        const result = await db.run(
+            'UPDATE lectures SET title = ?, speaker = ?, capacity = ? WHERE id = ?',
+            [title, speaker, capacity, lectureId]
         );
+        if (result.changes === 0) {
+            return res.status(404).json({ message: 'Palestra não encontrada.' });
+        }
         res.status(200).json({ message: 'Palestra atualizada com sucesso!' });
     } catch (err) {
-        res.status(500).json({ message: 'Erro ao atualizar palestra.', error: err.message });
+        console.error('Erro ao atualizar palestra no banco de dados:', err);
+        res.status(500).json({ message: 'Erro interno do servidor ao atualizar a palestra.', error: err.message });
     }
 });
 
@@ -195,18 +210,46 @@ app.get('/api/lectures/:id/registrations', authenticateToken, async (req, res) =
 });
 
 app.delete('/api/registrations/:registrationId/lectures/:lectureId', authenticateToken, isFullAdmin, async (req, res) => {
+    const { registrationId, lectureId } = req.params;
+    if (!registrationId || !lectureId) {
+        return res.status(400).json({ message: 'IDs inválidos.' });
+    }
     try {
-        const { registrationId, lectureId } = req.params;
+        await db.run('BEGIN TRANSACTION');
         await db.run('DELETE FROM registration_lectures WHERE registration_id = ? AND lecture_id = ?', [registrationId, lectureId]);
+        const remaining = await db.get('SELECT COUNT(*) as count FROM registration_lectures WHERE registration_id = ?', [registrationId]);
+        if (remaining.count === 0) {
+            await db.run('DELETE FROM registrations WHERE id = ?', [registrationId]);
+        }
+        await db.run('COMMIT');
         res.status(200).json({ message: 'Inscrição na palestra removida com sucesso.' });
     } catch (err) {
+        await db.run('ROLLBACK');
+        res.status(500).json({ message: 'Erro ao remover inscrição.', error: err.message });
+    }
+});
+
+app.delete('/api/registrations/:id', authenticateToken, isFullAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        await db.run('BEGIN TRANSACTION');
+        await db.run('DELETE FROM registration_lectures WHERE registration_id = ?', id);
+        await db.run('DELETE FROM registrations WHERE id = ?', id);
+        await db.run('COMMIT');
+        res.status(200).json({ message: 'Inscrição removida com sucesso.' });
+    } catch (err) {
+        await db.run('ROLLBACK');
         res.status(500).json({ message: 'Erro ao remover inscrição.', error: err.message });
     }
 });
 
 app.get('/api/users', authenticateToken, isFullAdmin, async (req, res) => {
-    const users = await db.all('SELECT id, username, is_admin FROM users');
-    res.json(users);
+    try {
+        const users = await db.all('SELECT id, username, is_admin FROM users');
+        res.json(users);
+    } catch (err) {
+        res.status(500).json({ message: 'Erro ao buscar usuários.', error: err.message });
+    }
 });
 
 app.post('/api/users', authenticateToken, isFullAdmin, async (req, res) => {
