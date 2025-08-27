@@ -3,7 +3,7 @@ import ReactDOM from "react-dom/client";
 
 // --- Tipos, Constantes e Funções Auxiliares ---
 const INSTITUTIONS = [
-  { name: "SENAI (Sorocaba e Itu)", logo: "public/logos/senai.png" },
+  { name: "SENAI (Sorocaba e Itu)", logo: "senai.png" },
   { name: "FATEC (Indaiatuba e Itu)", logo: "public/logos/fatec.png" },
   { name: "CEUNSP (Salto/Itu)", logo: "public/logos/ceunsp.png" },
   { name: "UNIEDUK (Indaiatuba)", logo: "public/logos/unieduk.png" },
