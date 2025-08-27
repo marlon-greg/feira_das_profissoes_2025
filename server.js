@@ -5,10 +5,11 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import 'dotenv/config';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-const JWT_SECRET = 'SEGREDO_SUPER_SECRETO_PARA_PROJETO_FEIRA_2025';
+const JWT_SECRET = process.env.JWT_SECRET;
 
 app.use(express.json());
 const __filename = fileURLToPath(import.meta.url);
