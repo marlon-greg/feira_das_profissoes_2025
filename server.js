@@ -57,7 +57,7 @@ app.post('/api/login', async (req, res) => {
 
 app.get('/api/lectures', async (req, res) => {
   try {
-    const lectures = await db.all('SELECT * FROM lectures ORDER BY day, time');
+    const lectures = await db.all('SELECT * FROM lectures ORDER BY day, time, CAST(room AS INTEGER)');
     res.json(lectures);
   } catch (err) { res.status(500).json({ message: 'Erro ao buscar palestras.', error: err.message }); }
 });
@@ -68,6 +68,21 @@ app.get('/api/lecture-counts', async (req, res) => {
     const countsMap = counts.reduce((acc, item) => ({...acc, [item.id]: item.count}), {});
     res.json(countsMap);
   } catch (err) { res.status(500).json({ message: 'Erro ao buscar contagem de inscrições.', error: err.message }); }
+});
+
+app.get('/api/registrations', authenticateToken, async (req, res) => {
+    try {
+        const registrations = await db.all(`
+            SELECT r.id, r.fullName, r.rm, r.email, r.studentClass, l.id as lectureId, l.title as lectureTitle, l.day, l.time
+            FROM registrations r
+            LEFT JOIN registration_lectures rl ON r.id = rl.registration_id
+            LEFT JOIN lectures l ON rl.lecture_id = l.id
+            ORDER BY r.fullName, l.day, l.time
+        `);
+        res.json(registrations);
+    } catch (err) {
+        res.status(500).json({ message: 'Erro ao buscar inscrições.', error: err.message });
+    }
 });
 
 app.post('/api/register', async (req, res) => {
@@ -84,7 +99,6 @@ app.post('/api/register', async (req, res) => {
 
         await db.run('BEGIN TRANSACTION');
 
-        // **NOVA VALIDAÇÃO DE CAPACIDADE**
         for (const lectureId of Object.values(selectedLectures)) {
             const lecture = await db.get('SELECT capacity FROM lectures WHERE id = ?', lectureId);
             const countResult = await db.get('SELECT COUNT(*) as count FROM registration_lectures WHERE lecture_id = ?', lectureId);
@@ -113,7 +127,6 @@ app.get('/api/settings/registrations-status', async (req, res) => {
     } catch (err) { res.status(500).json({ message: 'Erro ao buscar status das inscrições.' }); }
 });
 
-// --- ROTAS PROTEGIDAS ---
 app.put('/api/settings/registrations-status', authenticateToken, isFullAdmin, async (req, res) => {
     try {
         const { isOpen } = req.body;
@@ -122,40 +135,113 @@ app.put('/api/settings/registrations-status', authenticateToken, isFullAdmin, as
     } catch (err) { res.status(500).json({ message: 'Erro ao alterar status das inscrições.' }); }
 });
 
-app.post('/api/lectures', authenticateToken, isFullAdmin, async (req, res) => { /* ... seu código ... */ });
-app.delete('/api/lectures/:id', authenticateToken, isFullAdmin, async (req, res) => { /* ... seu código ... */ });
+app.post('/api/lectures', authenticateToken, isFullAdmin, async (req, res) => {
+    const { day, time, room, title, speaker, capacity } = req.body;
+    const id = `${day}-${time}-${room}`.replace(/[\s:]+/g, '-').toLowerCase();
+    try {
+        await db.run(
+            'INSERT INTO lectures (id, day, time, room, title, speaker, capacity) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [id, day, time, room, title, speaker, capacity || 25]
+        );
+        res.status(201).json({ message: 'Palestra adicionada com sucesso!' });
+    } catch (err) {
+        res.status(500).json({ message: 'Erro ao adicionar palestra.', error: err.message });
+    }
+});
 
-app.get('/api/export/csv', authenticateToken, async (req, res) => { /* ... seu código ... */ });
+app.put('/api/lectures/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    const { day, time, room, title, speaker, capacity } = req.body;
+    try {
+        await db.run(
+            'UPDATE lectures SET day = ?, time = ?, room = ?, title = ?, speaker = ?, capacity = ? WHERE id = ?',
+            [day, time, room, title, speaker, capacity, id]
+        );
+        res.status(200).json({ message: 'Palestra atualizada com sucesso!' });
+    } catch (err) {
+        res.status(500).json({ message: 'Erro ao atualizar palestra.', error: err.message });
+    }
+});
 
-// Rota de inscritos atualizada para incluir o ID da inscrição
+app.delete('/api/lectures/:id', authenticateToken, isFullAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        await db.run('DELETE FROM lectures WHERE id = ?', [id]);
+        res.status(200).json({ message: 'Palestra removida com sucesso!' });
+    } catch (err) {
+        res.status(500).json({ message: 'Erro ao remover palestra.', error: err.message });
+    }
+});
+
+app.get('/api/export/csv', authenticateToken, async (req, res) => {
+    try {
+        const query = `SELECT l.day, l.time, l.room, l.title, l.speaker, r.fullName, r.rm, r.email, r.studentClass FROM lectures l JOIN registration_lectures rl ON l.id = rl.lecture_id JOIN registrations r ON r.id = rl.registration_id ORDER BY l.day, l.time, l.title, r.fullName;`;
+        const data = await db.all(query);
+        if (data.length === 0) return res.status(404).send('Nenhuma inscrição encontrada para exportar.');
+        const header = "Dia,Horario,Sala,Palestra,Palestrante,NomeCompleto,RM,Email,Turma\n";
+        const rows = data.map(r => `${r.day},${r.time},"${r.room}","${r.title}","${r.speaker}","${r.fullName}",${r.rm},"${r.email}","${r.studentClass}"`).join('\n');
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', 'attachment; filename=lista_de_presenca.csv');
+        res.status(200).send(Buffer.from(header + rows, 'utf-8'));
+    } catch (err) { res.status(500).json({ message: 'Erro ao gerar o arquivo CSV.', error: err.message }); }
+});
+
 app.get('/api/lectures/:id/registrations', authenticateToken, async (req, res) => {
     try {
         const { id } = req.params;
-        const registrations = await db.all(`
-            SELECT r.id, r.fullName, r.rm, r.email, r.studentClass 
-            FROM registrations r 
-            JOIN registration_lectures rl ON r.id = rl.registration_id 
-            WHERE rl.lecture_id = ? 
-            ORDER BY r.fullName`, [id]);
+        const registrations = await db.all(`SELECT r.id, r.fullName, r.rm, r.email, r.studentClass FROM registrations r JOIN registration_lectures rl ON r.id = rl.registration_id WHERE rl.lecture_id = ? ORDER BY r.fullName`, [id]);
         res.json(registrations);
     } catch (err) { res.status(500).json({ message: 'Erro ao buscar inscritos.', error: err.message }); }
 });
 
-// **NOVA ROTA PARA DELETAR INSCRIÇÃO**
-app.delete('/api/registrations/:id', authenticateToken, isFullAdmin, async (req, res) => {
+app.delete('/api/registrations/:registrationId/lectures/:lectureId', authenticateToken, isFullAdmin, async (req, res) => {
+    const { registrationId, lectureId } = req.params;
+    if (!registrationId || !lectureId) {
+        return res.status(400).json({ message: 'IDs inválidos.' });
+    }
     try {
-        const { id } = req.params;
         await db.run('BEGIN TRANSACTION');
-        // Deleta a referência na tabela de junção
-        await db.run('DELETE FROM registration_lectures WHERE registration_id = ?', id);
-        // Deleta a inscrição principal
-        await db.run('DELETE FROM registrations WHERE id = ?', id);
+        await db.run('DELETE FROM registration_lectures WHERE registration_id = ? AND lecture_id = ?', [registrationId, lectureId]);
+        const remaining = await db.get('SELECT COUNT(*) as count FROM registration_lectures WHERE registration_id = ?', [registrationId]);
+        if (remaining.count === 0) {
+            await db.run('DELETE FROM registrations WHERE id = ?', [registrationId]);
+        }
         await db.run('COMMIT');
-        res.status(200).json({ message: 'Inscrição removida com sucesso.' });
+        res.status(200).json({ message: 'Inscrição na palestra removida com sucesso.' });
     } catch (err) {
         await db.run('ROLLBACK');
         res.status(500).json({ message: 'Erro ao remover inscrição.', error: err.message });
     }
+});
+
+app.get('/api/users', authenticateToken, isFullAdmin, async (req, res) => {
+    const users = await db.all('SELECT id, username, is_admin FROM users');
+    res.json(users);
+});
+
+app.post('/api/users', authenticateToken, isFullAdmin, async (req, res) => {
+    const { username, password, isAdmin } = req.body;
+    if (!username || !password) return res.status(400).json({ message: 'Usuário e senha são obrigatórios' });
+    const salt = await bcrypt.genSalt(10);
+    const password_hash = await bcrypt.hash(password, salt);
+    try {
+        await db.run('INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, ?)', [username, password_hash, isAdmin ? 1 : 0]);
+        res.status(201).json({ message: 'Usuário criado com sucesso.' });
+    } catch (e) {
+        res.status(409).json({ message: 'Nome de usuário já existe.' });
+    }
+});
+
+app.put('/api/users/:id', authenticateToken, isFullAdmin, async (req, res) => {
+    const { username, isAdmin } = req.body;
+    await db.run('UPDATE users SET username = ?, is_admin = ? WHERE id = ?', [username, isAdmin ? 1 : 0, req.params.id]);
+    res.status(200).json({ message: 'Usuário atualizado com sucesso.' });
+});
+
+app.delete('/api/users/:id', authenticateToken, isFullAdmin, async (req, res) => {
+    if (req.user.id == req.params.id) return res.status(403).json({ message: 'Você não pode excluir seu próprio usuário.' });
+    await db.run('DELETE FROM users WHERE id = ?', req.params.id);
+    res.status(200).json({ message: 'Usuário excluído com sucesso.' });
 });
 
 app.get('*', (req, res) => {
@@ -165,4 +251,5 @@ app.get('*', (req, res) => {
 if (process.env.NODE_ENV !== 'production') {
     app.listen(PORT, () => { console.log(`Servidor rodando na porta ${PORT}`); });
 }
+
 export default app;

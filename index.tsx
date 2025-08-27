@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, FormEvent } from "react";
 import ReactDOM from "react-dom/client";
 
-// --- Tipos e Constantes ---
+// --- Tipos, Constantes e Funções Auxiliares ---
 const INSTITUTIONS = [
   { name: "SENAI (Sorocaba e Itu)", logo: "assets/logos/senai.png" },
   { name: "FATEC (Indaiatuba e Itu)", logo: "assets/logos/fatec.png" },
@@ -9,16 +9,18 @@ const INSTITUTIONS = [
   { name: "UNIEDUK (Indaiatuba)", logo: "assets/logos/unieduk.png" },
   { name: "ATHON", logo: "assets/logos/athon.png" },
   { name: "UNIP", logo: "assets/logos/unip.png" },
+  { name: "SENAC", logo: "assets/logos/senac.png" },
 ];
 const INDIVIDUALS_AND_OTHERS = [
   "LUCIANA PACHECO", "BRUNA ROSA", "LETÍCIA JORAND (EGRESSO)",
-  "MARIA LUISA (EGRESSO)", "ZOONOSES SALTO", "ROTARY (SANDERSON)",
+  "MARIA LUISA (EGRESSO)", "ZOONOSES SALTO", "ROTARY (SANDERSON)", "LUCAS LIMA DA SILVA"
 ];
 type Lecture = { id: string; day: number; time: string; room: string; title: string; speaker: string; capacity: number; };
-type UserProfile = { username: string; isAdmin: number; };
+type UserProfile = { id: number, username: string; isAdmin: number; };
 type Registration = { id: number; fullName: string; rm: string; email: string; studentClass: string; };
+type FullRegistrationInfo = Registration & { lectureId: string | null; lectureTitle: string | null; day: number | null; time: string | null; };
+type User = { id: number; username: string; is_admin: number; };
 
-// --- Funções Auxiliares ---
 function parseJwt(token: string): UserProfile | null {
     try {
         return JSON.parse(atob(token.split('.')[1]));
@@ -35,16 +37,10 @@ const App = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/lectures")
-      .then((res) => res.json())
-      .then((data) => {
+    fetch("/api/lectures").then((res) => res.json()).then((data) => {
         setLectures(data);
         setLoading(false);
-      })
-      .catch(error => {
-        console.error("Falha ao carregar palestras:", error);
-        setLoading(false);
-      });
+      }).catch(error => { setLoading(false); console.error("Falha ao carregar palestras:", error);});
   }, []);
 
   useEffect(() => {
@@ -66,17 +62,15 @@ const App = () => {
   }
 
   const renderView = () => {
-    if (loading) {
-        return <div className="card" style={{textAlign: 'center'}}>Carregando...</div>;
-    }
+    if (loading) return <div className="card" style={{textAlign: 'center'}}>Carregando...</div>;
     
     switch (hash) {
       case "#form":
         return <RegistrationForm lectures={lectures} goToSuccess={() => (window.location.hash = "success")} />;
       case "#admin":
-        if (adminToken) {
-          return <AdminView lectures={lectures} setLectures={setLectures} token={adminToken} onLogout={handleLogout} />;
-        }
+      case "#registrations":
+      case "#users":
+        if (adminToken) return <AdminContainer lectures={lectures} setLectures={setLectures} token={adminToken} onLogout={handleLogout} />;
         return <AdminLogin onAuthSuccess={handleLoginSuccess} />;
       case "#success":
         return <SuccessScreen goToHome={() => (window.location.hash = "home")} />;
@@ -88,18 +82,11 @@ const App = () => {
 
   return (
     <>
-      <header>
-        <div className="container header-content">
-          <a href="#home">
-            <img src="assets/sesi-logo.png" alt="SESI Logo" className="header-logo" />
-          </a>
-          <h1>FEIRA DAS PROFISSÕES SESI 2025</h1>
-        </div>
-      </header>
+      <header><div className="container header-content"><a href="#home"><img src="assets/sesi-logo.png" alt="SESI Logo" className="header-logo" /></a><h1>FEIRA DAS PROFISSÕES SESI 2025</h1></div></header>
       <main>{renderView()}</main>
-      <footer>
-        <div className="container">Escola SESI &copy; 2025</div>
-      </footer>
+      <footer><div className="container"> SESI 2025 <br />
+        <strong>Desenvolvido por:</strong> <br/>Marlon Palata Fanger Rodrigues / Celso Rodrigo Giusti / Daniel Manoel Filho
+      </div></footer>
     </>
   );
 };
@@ -174,16 +161,22 @@ const RegistrationForm = ({ lectures, goToSuccess }: { lectures: Lecture[]; goTo
   const [registrationsOpen, setRegistrationsOpen] = useState<boolean | null>(null);
 
   useEffect(() => {
+    fetch('/api/settings/registrations-status').then(res => res.json()).then(data => setRegistrationsOpen(data.isOpen));
+    const fetchCounts = () => {
       fetch('/api/lecture-counts').then(res => res.json()).then(setLectureCounts);
-      fetch('/api/settings/registrations-status').then(res => res.json()).then(data => setRegistrationsOpen(data.isOpen));
+    };
+    fetchCounts();
+    const intervalId = setInterval(fetchCounts, 30000);
+    return () => clearInterval(intervalId);
   }, []);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     setFormData((prev) => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
-  const handleLectureSelect = (time: string, lectureId: string) => {
-    setSelectedLectures((prev) => ({ ...prev, [time]: lectureId }));
+  const handleLectureSelect = (day: number, time: string, lectureId: string) => {
+    const key = `${day}-${time}`;
+    setSelectedLectures((prev) => ({ ...prev, [key]: lectureId }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -245,7 +238,7 @@ const RegistrationForm = ({ lectures, goToSuccess }: { lectures: Lecture[]; goTo
               return (
                 <div key={lecture.id} className="lecture-option">
                   <label>
-                    <input type="radio" name={`lecture_time_${time}`} value={lecture.id} checked={selectedLectures[time] === lecture.id} onChange={() => handleLectureSelect(time, lecture.id)} disabled={isFull} />
+                    <input type="radio" name={`${lecture.day}-${lecture.time}`} value={lecture.id} checked={selectedLectures[`${lecture.day}-${lecture.time}`] === lecture.id} onChange={() => handleLectureSelect(lecture.day, lecture.time, lecture.id)} disabled={isFull} />
                     <div className="details"><strong>{lecture.title}</strong> - {lecture.speaker}</div>
                     <span className="badge badge-room">{lecture.room}</span>
                     <span className="badge badge-dh">Vagas: {lecture.capacity - registeredCount} / {lecture.capacity}</span>
@@ -288,12 +281,223 @@ const RegistrationForm = ({ lectures, goToSuccess }: { lectures: Lecture[]; goTo
   );
 };
 
-const AdminView = ({ lectures, setLectures, token, onLogout }: { lectures: Lecture[]; setLectures: (lectures: Lecture[]) => void; token: string; onLogout: () => void; }) => {
+const AdminContainer = ({ lectures, setLectures, token, onLogout }: { lectures: Lecture[]; setLectures: (l: Lecture[])=>void; token: string; onLogout: () => void;}) => {
+    const [hash, setHash] = useState(window.location.hash);
+    const userProfile = useMemo(() => parseJwt(token), [token]);
+    const isFullAdmin = userProfile?.isAdmin === 1;
+
+    useEffect(() => {
+        const handleHashChange = () => setHash(window.location.hash);
+        window.addEventListener('hashchange', handleHashChange);
+        return () => window.removeEventListener('hashchange', handleHashChange);
+    }, []);
+
+    let viewToRender;
+    switch (hash) {
+        case "#registrations":
+            viewToRender = <RegistrationsView token={token} isFullAdmin={isFullAdmin} />;
+            break;
+        case "#users":
+            viewToRender = isFullAdmin ? <UserManagementView token={token} userProfile={userProfile} /> : <div className="alert alert-error">Acesso negado.</div>;
+            break;
+        case "#admin":
+        default:
+            viewToRender = <AdminView lectures={lectures} setLectures={setLectures} token={token} />;
+    }
+
+    return (
+        <div className="card">
+            <div className="admin-nav" style={{display: 'flex', gap: '1rem', borderBottom: '1px solid #eee', paddingBottom: '1rem', marginBottom: '1rem', flexWrap: 'wrap'}}>
+                <a href="#admin" className="btn">Palestras</a>
+                <a href="#registrations" className="btn">Inscritos</a>
+                {isFullAdmin && <a href="#users" className="btn">Usuários</a>}
+                <button className="btn" onClick={onLogout} style={{marginLeft: 'auto', backgroundColor: '#555'}}>Sair</button>
+            </div>
+            {viewToRender}
+        </div>
+    );
+}
+
+// **RegistrationsView ATUALIZADO com nova lógica de agrupamento**
+const RegistrationsView = ({ token, isFullAdmin }: { token: string, isFullAdmin: boolean }) => {
+    const [registrations, setRegistrations] = useState<FullRegistrationInfo[]>([]);
+    const [loading, setLoading] = useState(true);
+
+    const fetchRegistrations = () => {
+        setLoading(true);
+        fetch('/api/registrations', { headers: { Authorization: `Bearer ${token}` } })
+            .then(res => res.json())
+            .then(data => setRegistrations(data))
+            .finally(() => setLoading(false));
+    };
+
+    useEffect(fetchRegistrations, [token]);
+
+    const handleDelete = async (registrationId: number, lectureId: string | null) => {
+        if (!lectureId) {
+            if (confirm('Este é um cadastro sem palestras. Deseja excluir o aluno permanentemente?')) {
+                await fetch(`/api/registrations/${registrationId}`, { 
+                    method: 'DELETE', 
+                    headers: { Authorization: `Bearer ${token}` } 
+                });
+                fetchRegistrations();
+            }
+        } else {
+            if (confirm('Deseja realmente remover este aluno desta palestra específica?')) {
+                await fetch(`/api/registrations/${registrationId}/lectures/${lectureId}`, { 
+                    method: 'DELETE', 
+                    headers: { Authorization: `Bearer ${token}` } 
+                });
+                fetchRegistrations();
+            }
+        }
+    };
+    
+    // **NOVA LÓGICA PARA AGRUPAR DADOS**
+    const groupedRegistrations = useMemo(() => {
+        return registrations.reduce((acc, reg) => {
+            if (!reg.day || !reg.lectureTitle) {
+                // Agrupa alunos "órfãos" em uma categoria separada
+                const dayKey = 'Alunos sem palestra';
+                if (!acc[dayKey]) acc[dayKey] = {};
+                if (!acc[dayKey]['N/A']) acc[dayKey]['N/A'] = [];
+                acc[dayKey]['N/A'].push(reg);
+                return acc;
+            }
+
+            const dayKey = `Dia ${reg.day}`;
+            const lectureKey = `${reg.time} - ${reg.lectureTitle}`;
+
+            if (!acc[dayKey]) acc[dayKey] = {};
+            if (!acc[dayKey][lectureKey]) acc[dayKey][lectureKey] = [];
+            acc[dayKey][lectureKey].push(reg);
+            
+            return acc;
+        }, {} as Record<string, Record<string, FullRegistrationInfo[]>>);
+    }, [registrations]);
+
+    if (loading) return <p>Carregando inscritos...</p>;
+
+    return (
+        <div>
+            <h2>Todos os Inscritos</h2>
+            {Object.entries(groupedRegistrations).map(([day, lectures]) => (
+                <div key={day} className="day-group">
+                    <h2>{day.startsWith('Dia') ? `${day} de Setembro` : day}</h2>
+                    {Object.entries(lectures).map(([lectureTitle, registrants]) => (
+                        <div key={lectureTitle} className="timeslot-group">
+                            <h3>{lectureTitle}</h3>
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Nome</th>
+                                        <th>RM</th>
+                                        <th>Turma</th>
+                                        {isFullAdmin && <th>Ações</th>}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {registrants.map((reg) => (
+                                        <tr key={reg.id}>
+                                            <td>{reg.fullName}</td>
+                                            <td>{reg.rm}</td>
+                                            <td>{reg.studentClass}</td>
+                                            {isFullAdmin && 
+                                                <td>
+                                                    <button className="btn-danger" onClick={() => handleDelete(reg.id, reg.lectureId)}>Excluir</button>
+                                                </td>
+                                            }
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    ))}
+                </div>
+            ))}
+        </div>
+    );
+};
+
+const UserManagementView = ({ token, userProfile }: { token: string, userProfile: UserProfile | null }) => {
+    const [users, setUsers] = useState<User[]>([]);
+    const [loading, setLoading] = useState(true);
+    
+    const fetchUsers = () => {
+        setLoading(true);
+        fetch('/api/users', { headers: { Authorization: `Bearer ${token}` } })
+            .then(res => res.json())
+            .then(data => setUsers(data))
+            .finally(() => setLoading(false));
+    };
+
+    useEffect(fetchUsers, [token]);
+
+    const handleDelete = async (id: number) => {
+        if (id === userProfile?.id) {
+            alert("Você não pode excluir seu próprio usuário.");
+            return;
+        }
+        if (confirm('Deseja realmente excluir este usuário?')) {
+            const res = await fetch(`/api/users/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+            if (!res.ok) {
+                const data = await res.json();
+                alert(`Erro: ${data.message}`);
+            }
+            fetchUsers();
+        }
+    };
+    
+    const handleAddUser = async () => {
+        const username = prompt("Nome do novo usuário:");
+        if (!username) return;
+        const password = prompt("Senha do novo usuário (mínimo 6 caracteres):");
+        if (!password || password.length < 6) {
+            alert("Senha inválida ou muito curta.");
+            return;
+        }
+        const isAdmin = confirm("Este usuário será um Administrador Completo? (Clique em 'OK' para Admin, 'Cancelar' para Visitante)");
+        
+        await fetch('/api/users', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ username, password, isAdmin })
+        });
+        fetchUsers();
+    };
+    
+    if (loading) return <p>Carregando usuários...</p>;
+
+    return (
+        <div>
+            <h2>Gerenciamento de Usuários</h2>
+            <button className="btn" onClick={handleAddUser}>Adicionar Novo Usuário</button>
+            <table style={{marginTop: '1rem'}}>
+                <thead><tr><th>Username</th><th>Perfil</th><th>Ações</th></tr></thead>
+                <tbody>
+                    {users.map(user => (
+                        <tr key={user.id}>
+                            <td>{user.username}</td>
+                            <td>{user.is_admin ? 'Admin' : 'Visitante'}</td>
+                            <td>
+                                <button className="btn-secondary" disabled>Editar</button>
+                                <button className="btn-danger" onClick={() => handleDelete(user.id)}>Excluir</button>
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    );
+};
+
+const AdminView = ({ lectures, setLectures, token }: { lectures: Lecture[]; setLectures: (l: Lecture[])=>void; token: string; }) => {
     const [isAdding, setIsAdding] = useState(false);
     const [newLecture, setNewLecture] = useState({ day: 4, time: '09:00', room: '', title: '', speaker: '', capacity: 25 });
     const [loading, setLoading] = useState(false);
     const [registrationsOpen, setRegistrationsOpen] = useState<boolean>(true);
-    const [modalData, setModalData] = useState<{ lecture: Lecture; registrations: Registration[] } | null>(null);
+    const [registrantsModal, setRegistrantsModal] = useState<{ lecture: Lecture; registrations: Registration[] } | null>(null);
+    const [editingLecture, setEditingLecture] = useState<Lecture | null>(null);
     const [modalLoading, setModalLoading] = useState(false);
     const userProfile = useMemo(() => parseJwt(token), [token]);
     const isFullAdmin = userProfile?.isAdmin === 1;
@@ -317,15 +521,20 @@ const AdminView = ({ lectures, setLectures, token, onLogout }: { lectures: Lectu
     const handleAddLecture = async (e: FormEvent) => {
         e.preventDefault();
         setLoading(true);
-        await fetch("/api/lectures", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-            body: JSON.stringify(newLecture),
-        });
-        await fetchLectures();
-        setNewLecture({ day: 4, time: '09:00', room: '', title: '', speaker: '', capacity: 25 });
-        setIsAdding(false);
-        setLoading(false);
+        try {
+            await fetch("/api/lectures", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                body: JSON.stringify(newLecture),
+            });
+            await fetchLectures();
+            setNewLecture({ day: 4, time: '09:00', room: '', title: '', speaker: '', capacity: 25 });
+            setIsAdding(false);
+        } catch (err) {
+            alert('Erro ao adicionar palestra.');
+        } finally {
+            setLoading(false);
+        }
     };
     
     const handleExportCSV = () => { window.location.href = `/api/export/csv?token=${token}`; };
@@ -346,11 +555,11 @@ const AdminView = ({ lectures, setLectures, token, onLogout }: { lectures: Lectu
     
     const showRegistrations = async (lecture: Lecture) => {
         setModalLoading(true);
-        setModalData({ lecture, registrations: [] });
+        setRegistrantsModal({ lecture, registrations: [] });
         try {
             const res = await fetch(`/api/lectures/${lecture.id}/registrations`, { headers: { Authorization: `Bearer ${token}` } });
             const data = await res.json();
-            setModalData({ lecture, registrations: data });
+            setRegistrantsModal({ lecture, registrations: data });
         } catch (err) { console.error("Erro ao buscar inscritos", err); } 
         finally { setModalLoading(false); }
     };
@@ -358,7 +567,7 @@ const AdminView = ({ lectures, setLectures, token, onLogout }: { lectures: Lectu
     const handleDeleteRegistration = async (registrationId: number, lecture: Lecture) => {
         if (confirm('Tem certeza que deseja remover esta inscrição? Esta ação não pode ser desfeita.')) {
             try {
-                const res = await fetch(`/api/registrations/${registrationId}`, {
+                const res = await fetch(`/api/registrations/${registrationId}/lectures/${lecture.id}`, {
                     method: 'DELETE',
                     headers: { Authorization: `Bearer ${token}` }
                 });
@@ -373,14 +582,47 @@ const AdminView = ({ lectures, setLectures, token, onLogout }: { lectures: Lectu
         }
     };
 
+    const handleUpdateLecture = async (e: FormEvent) => {
+        e.preventDefault();
+        if (!editingLecture) return;
+
+        setLoading(true);
+        try {
+            const res = await fetch(`/api/lectures/${editingLecture.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                body: JSON.stringify(editingLecture),
+            });
+
+            if (res.ok) {
+                setEditingLecture(null);
+                fetchLectures();
+            } else {
+                alert('Falha ao atualizar a palestra.');
+            }
+        } catch (err) {
+            alert('Erro de conexão ao tentar atualizar a palestra.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const lecturesByDayAndTime = useMemo(() => {
+        return lectures.reduce((acc, lecture) => {
+            const day = `Dia ${lecture.day}`;
+            const time = lecture.time;
+            if (!acc[day]) acc[day] = {};
+            if (!acc[day][time]) acc[day][time] = [];
+            acc[day][time].push(lecture);
+            return acc;
+        }, {} as Record<string, Record<string, Lecture[]>>);
+    }, [lectures]);
+
+
     return (
         <>
-        <div className="card admin-view">
-            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem'}}>
-                <h2>Painel de Controle ({userProfile?.username})</h2>
-                <button className="btn" onClick={onLogout}>Sair</button>
-            </div>
-            
+        <div>
+            <h2>Gerenciamento de Palestras</h2>
             <div className="admin-actions" style={{display: 'flex', flexWrap: 'wrap', gap: '1rem', marginBottom: '2rem'}}>
                 {isFullAdmin && !isAdding && <button className="btn" onClick={() => setIsAdding(true)}>Adicionar Palestra</button>}
                 <button className="btn" onClick={handleExportCSV} style={{backgroundColor: '#005baa'}}>Baixar Lista Geral (CSV)</button>
@@ -403,39 +645,53 @@ const AdminView = ({ lectures, setLectures, token, onLogout }: { lectures: Lectu
                 </form>
             )}
             
-            <table style={{marginTop: '2rem'}}>
-                <thead><tr><th>Dia</th><th>Horário</th><th>Sala</th><th>Título</th><th>Ações</th></tr></thead>
-                <tbody>
-                    {lectures.map((lecture) => (
-                        <tr key={lecture.id}>
-                            <td>{lecture.day}</td><td>{lecture.time}</td><td>{lecture.room}</td><td>{lecture.title}</td>
-                            <td style={{display: 'flex', gap: '0.5rem'}}>
-                                <button onClick={() => showRegistrations(lecture)}>Ver Inscritos</button>
-                                {isFullAdmin && <button onClick={() => handleDeleteLecture(lecture.id)}>Remover</button>}
-                            </td>
-                        </tr>
+            {Object.keys(lecturesByDayAndTime).length > 0 ? Object.entries(lecturesByDayAndTime).map(([day, times]) => (
+                <div key={day} className="day-group">
+                    <h2>{day} de Setembro</h2>
+                    {Object.entries(times).map(([time, lecturesInTime]) => (
+                        <div key={time} className="timeslot-group">
+                            <h3>{time}</h3>
+                            <table>
+                                <thead><tr><th>Sala</th><th>Título</th><th>Palestrante</th><th>Capacidade</th><th>Ações</th></tr></thead>
+                                <tbody>
+                                    {lecturesInTime.map((lecture) => (
+                                        <tr key={lecture.id}>
+                                            <td>{lecture.room}</td>
+                                            <td>{lecture.title}</td>
+                                            <td>{lecture.speaker}</td>
+                                            <td>{lecture.capacity}</td>
+                                            <td style={{display: 'flex', gap: '0.5rem'}}>
+                                                <button className="btn-secondary" onClick={() => setEditingLecture(lecture)}>Editar</button>
+                                                <button className="btn-secondary" onClick={() => showRegistrations(lecture)}>Inscritos</button>
+                                                {isFullAdmin && <button className="btn-danger" onClick={() => handleDeleteLecture(lecture.id)}>Remover</button>}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
                     ))}
-                </tbody>
-            </table>
+                </div>
+            )) : <p>Nenhuma palestra cadastrada ainda.</p>}
         </div>
 
-        {modalData && (
-            <div className="modal-overlay" onClick={() => setModalData(null)}>
+        {registrantsModal && (
+            <div className="modal-overlay" onClick={() => setRegistrantsModal(null)}>
                 <div className="modal-content" onClick={e => e.stopPropagation()}>
                     <div className="modal-header">
-                        <h3>Inscritos em: {modalData.lecture.title}</h3>
-                        <button className="btn" onClick={() => setModalData(null)}>Fechar</button>
+                        <h3>Inscritos em: {registrantsModal.lecture.title}</h3>
+                        <button className="btn" onClick={() => setRegistrantsModal(null)}>Fechar</button>
                     </div>
                     {modalLoading ? <p>Carregando...</p> : (
                         <table>
                             <thead><tr><th>Nome Completo</th><th>RM</th><th>Ações</th></tr></thead>
                             <tbody>
-                                {modalData.registrations.length > 0 ? modalData.registrations.map(reg => (
+                                {registrantsModal.registrations.length > 0 ? registrantsModal.registrations.map(reg => (
                                     <tr key={reg.id}>
                                         <td>{reg.fullName}</td>
                                         <td>{reg.rm}</td>
                                         <td>
-                                            {isFullAdmin && <button onClick={() => handleDeleteRegistration(reg.id, modalData.lecture)}>Remover</button>}
+                                            {isFullAdmin && <button className="btn-danger" onClick={() => handleDeleteRegistration(reg.id, registrantsModal.lecture)}>Remover</button>}
                                         </td>
                                     </tr>
                                 )) : <tr><td colSpan={3} style={{textAlign: 'center'}}>Nenhum inscrito nesta palestra.</td></tr>}
@@ -445,10 +701,27 @@ const AdminView = ({ lectures, setLectures, token, onLogout }: { lectures: Lectu
                 </div>
             </div>
         )}
+
+        {editingLecture && (
+            <div className="modal-overlay" onClick={() => setEditingLecture(null)}>
+                <div className="modal-content" onClick={e => e.stopPropagation()}>
+                    <div className="modal-header">
+                        <h3>Editando Palestra</h3>
+                        <button className="btn" onClick={() => setEditingLecture(null)}>Cancelar</button>
+                    </div>
+                    <form onSubmit={handleUpdateLecture}>
+                        <div className="form-group"><label>Título</label><input type="text" value={editingLecture.title} onChange={e => setEditingLecture({...editingLecture, title: e.target.value})} required/></div>
+                        <div className="form-group"><label>Palestrante</label><input type="text" value={editingLecture.speaker} onChange={e => setEditingLecture({...editingLecture, speaker: e.target.value})} required/></div>
+                        <div className="form-group"><label>Sala</label><input type="text" value={editingLecture.room} onChange={e => setEditingLecture({...editingLecture, room: e.target.value})} required/></div>
+                        <div className="form-group"><label>Capacidade</label><input type="number" value={editingLecture.capacity} onChange={e => setEditingLecture({...editingLecture, capacity: Number(e.target.value)})} required/></div>
+                        <button type="submit" className="btn" disabled={loading}>{loading ? 'Salvando...' : 'Salvar Alterações'}</button>
+                    </form>
+                </div>
+            </div>
+        )}
         </>
     );
 };
 
-// --- Renderização da Aplicação ---
 const root = ReactDOM.createRoot(document.getElementById("root") as HTMLElement);
 root.render(<App />);
